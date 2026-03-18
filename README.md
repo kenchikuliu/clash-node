@@ -16,30 +16,55 @@
 
 ## 📦 安装
 
-### 依赖
+### 一键安装（推荐）
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kenchikuliu/clash-node/master/install.sh | bash
+```
+
+### 手动安装
+
+#### 1. 安装依赖
 
 ```bash
 # Ubuntu/Debian
-sudo apt install python3 python3-pip python3-yaml
+sudo apt install python3 python3-pip
 
 # 安装 Python 依赖
 pip3 install requests pyyaml
 ```
 
-### 安装 clash-node
+#### 2. 下载并安装 clash-node
 
 ```bash
 # 下载脚本
-curl -O https://raw.githubusercontent.com/your-repo/clash-node/main/clash-node
+curl -fsSL https://raw.githubusercontent.com/kenchikuliu/clash-node/master/clash-node -o ~/bin/clash-node
 
 # 添加执行权限
-chmod +x clash-node
+chmod +x ~/bin/clash-node
 
-# 移动到系统路径
-sudo mv clash-node /usr/local/bin/
+# 确保 ~/bin 在 PATH 中
+echo 'export PATH="$HOME/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+```
 
-# 或安装到用户目录
-mv clash-node ~/bin/
+#### 3. 配置 Clash
+
+```bash
+# 下载示例配置
+mkdir -p ~/.config/clash
+curl -fsSL https://raw.githubusercontent.com/kenchikuliu/clash-node/master/config.example.yaml -o ~/.config/clash/config.yaml
+
+# 编辑配置文件，填入真实节点信息
+nano ~/.config/clash/config.yaml
+```
+
+#### 4. 启动 Clash 服务
+
+```bash
+# 如果使用 systemd
+systemctl --user start clash.service
+systemctl --user enable clash.service
 ```
 
 ## 🚀 快速开始
@@ -207,8 +232,8 @@ chmod +x ~/bin/clash-node
 ## 📧 联系方式
 
 - 作者: charlii
-- 项目地址: https://github.com/your-repo/clash-node
-- Issue: https://github.com/your-repo/clash-node/issues
+- 项目地址: https://github.com/kenchikuliu/clash-node
+- Issue: https://github.com/kenchikuliu/clash-node/issues
 
 ---
 

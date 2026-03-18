@@ -627,7 +627,7 @@ def cmd_help():
   - 后台运行，日志记录到 ~/.config/clash/tune.log
 
 {Colors.BOLD}项目地址:{Colors.RESET}
-  https://github.com/your-repo/clash-node
+  https://github.com/kenchikuliu/clash-node
 
 {Colors.BOLD}许可证:{Colors.RESET}
   MIT License
