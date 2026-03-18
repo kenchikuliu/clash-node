@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+tune.log
+
+# ⚠️ 重要：防止泄漏配置和节点信息
+config.yaml
+config.local.yaml
+*.pid
+.config/
+
+# 敏感信息
+*.key
+*.pem
+*.crt

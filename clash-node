@@ -1,0 +1,683 @@
+#!/usr/bin/env python3
+"""
+clash-node - Clash 节点管理 CLI 工具
+快速切换、测速、管理 Clash 代理节点
+
+作者: SLAM Research Team
+许可: MIT License
+"""
+
+import json
+import sys
+import time
+import subprocess
+import requests
+import yaml
+from pathlib import Path
+from typing import List, Dict, Optional
+from datetime import datetime
+
+# 配置
+CLASH_CONFIG = Path.home() / ".config/clash/config.yaml"
+CLASH_API = "http://127.0.0.1:9090"
+CLASH_SERVICE = "clash.service"
+TUNE_PID_FILE = Path.home() / ".config/clash/tune.pid"
+TUNE_LOG_FILE = Path.home() / ".config/clash/tune.log"
+
+class Colors:
+    """终端颜色"""
+    RESET = "\033[0m"
+    BOLD = "\033[1m"
+    RED = "\033[91m"
+    GREEN = "\033[92m"
+    YELLOW = "\033[93m"
+    BLUE = "\033[94m"
+    CYAN = "\033[96m"
+    GRAY = "\033[90m"
+
+def print_header(text: str):
+    """打印标题"""
+    print(f"\n{Colors.BOLD}{Colors.CYAN}{text}{Colors.RESET}")
+    print("=" * 60)
+
+def print_success(text: str):
+    """打印成功消息"""
+    print(f"{Colors.GREEN}✓{Colors.RESET} {text}")
+
+def print_error(text: str):
+    """打印错误消息"""
+    print(f"{Colors.RED}✗{Colors.RESET} {text}", file=sys.stderr)
+
+def print_warning(text: str):
+    """打印警告消息"""
+    print(f"{Colors.YELLOW}⚠{Colors.RESET} {text}")
+
+def print_info(text: str):
+    """打印信息"""
+    print(f"{Colors.BLUE}ℹ{Colors.RESET} {text}")
+
+def load_config() -> Dict:
+    """加载 Clash 配置"""
+    try:
+        with open(CLASH_CONFIG, 'r', encoding='utf-8') as f:
+            return yaml.safe_load(f)
+    except Exception as e:
+        print_error(f"无法加载配置文件: {e}")
+        sys.exit(1)
+
+def save_config(config: Dict):
+    """保存 Clash 配置"""
+    try:
+        with open(CLASH_CONFIG, 'w', encoding='utf-8') as f:
+            yaml.dump(config, f, allow_unicode=True, default_flow_style=False)
+        print_success("配置已保存")
+
+        # 重启 Clash 服务
+        subprocess.run(["systemctl", "--user", "restart", CLASH_SERVICE],
+                      check=True, capture_output=True)
+        print_success("Clash 服务已重启")
+        time.sleep(2)  # 等待服务启动
+    except Exception as e:
+        print_error(f"保存配置失败: {e}")
+        sys.exit(1)
+
+def get_proxies() -> List[Dict]:
+    """获取所有代理节点"""
+    try:
+        response = requests.get(f"{CLASH_API}/proxies", timeout=5)
+        response.raise_for_status()
+        data = response.json()
+
+        # 获取 PROXY 组的节点列表
+        proxy_group = data.get("proxies", {}).get("PROXY", {})
+        all_nodes = proxy_group.get("all", [])
+
+        # 过滤掉 DIRECT
+        nodes = [name for name in all_nodes if name != "DIRECT"]
+
+        # 获取每个节点的详细信息
+        proxies = []
+        for name in nodes:
+            node_info = data["proxies"].get(name, {})
+            proxies.append({
+                "name": name,
+                "type": node_info.get("type", "unknown"),
+                "delay": node_info.get("history", [{}])[-1].get("delay", 0) if node_info.get("history") else 0
+            })
+
+        return proxies
+    except Exception as e:
+        print_error(f"无法获取节点列表: {e}")
+        return []
+
+def get_current_proxy() -> Optional[str]:
+    """获取当前使用的节点"""
+    try:
+        response = requests.get(f"{CLASH_API}/proxies/PROXY", timeout=5)
+        response.raise_for_status()
+        return response.json().get("now")
+    except Exception as e:
+        print_error(f"无法获取当前节点: {e}")
+        return None
+
+def switch_proxy(node_name: str) -> bool:
+    """切换到指定节点"""
+    try:
+        response = requests.put(
+            f"{CLASH_API}/proxies/PROXY",
+            json={"name": node_name},
+            timeout=5
+        )
+        response.raise_for_status()
+        return True
+    except Exception as e:
+        print_error(f"切换节点失败: {e}")
+        return False
+
+def test_proxy_delay(node_name: str, timeout: int = 5000) -> int:
+    """测试节点延迟（毫秒）"""
+    try:
+        response = requests.get(
+            f"{CLASH_API}/proxies/{node_name}/delay",
+            params={"timeout": timeout, "url": "https://www.google.com/generate_204"},
+            timeout=timeout/1000 + 2
+        )
+        response.raise_for_status()
+        return response.json().get("delay", 0)
+    except Exception as e:
+        return 0
+
+def format_delay(delay: int) -> str:
+    """格式化延迟显示"""
+    if delay == 0:
+        return f"{Colors.RED}超时{Colors.RESET}"
+    elif delay < 100:
+        return f"{Colors.GREEN}{delay}ms{Colors.RESET}"
+    elif delay < 300:
+        return f"{Colors.YELLOW}{delay}ms{Colors.RESET}"
+    else:
+        return f"{Colors.RED}{delay}ms{Colors.RESET}"
+
+def cmd_list():
+    """列出所有节点"""
+    print_header("Clash 节点列表")
+
+    proxies = get_proxies()
+    current = get_current_proxy()
+
+    if not proxies:
+        print_warning("未找到任何节点")
+        return
+
+    print(f"\n{'序号':<6} {'节点名称':<25} {'类型':<10} {'延迟':<15} {'状态'}")
+    print("-" * 70)
+
+    for i, proxy in enumerate(proxies, 1):
+        is_current = "✓ 当前" if proxy["name"] == current else ""
+        current_mark = f"{Colors.GREEN}{is_current}{Colors.RESET}" if is_current else ""
+
+        print(f"{i:<6} {proxy['name']:<25} {proxy['type']:<10} "
+              f"{format_delay(proxy['delay']):<25} {current_mark}")
+
+    print()
+
+def cmd_switch(index: int):
+    """切换到指定序号的节点"""
+    proxies = get_proxies()
+
+    if not proxies:
+        print_error("未找到任何节点")
+        return
+
+    if index < 1 or index > len(proxies):
+        print_error(f"无效的节点序号: {index} (有效范围: 1-{len(proxies)})")
+        return
+
+    node_name = proxies[index - 1]["name"]
+    print_info(f"正在切换到节点: {node_name}")
+
+    if switch_proxy(node_name):
+        print_success(f"已切换到节点 {index}: {node_name}")
+    else:
+        print_error("切换失败")
+
+def cmd_status():
+    """显示当前节点状态"""
+    print_header("Clash 状态")
+
+    current = get_current_proxy()
+    if current:
+        print(f"\n当前节点: {Colors.GREEN}{current}{Colors.RESET}")
+
+        # 测试延迟
+        print_info("正在测试延迟...")
+        delay = test_proxy_delay(current)
+        print(f"延迟: {format_delay(delay)}\n")
+    else:
+        print_warning("无法获取当前节点\n")
+
+def cmd_test(index: Optional[int] = None):
+    """测试节点延迟"""
+    proxies = get_proxies()
+
+    if not proxies:
+        print_error("未找到任何节点")
+        return
+
+    if index is not None:
+        # 测试单个节点
+        if index < 1 or index > len(proxies):
+            print_error(f"无效的节点序号: {index}")
+            return
+
+        node = proxies[index - 1]
+        print_info(f"正在测试节点 {index}: {node['name']}")
+        delay = test_proxy_delay(node['name'])
+        print(f"延迟: {format_delay(delay)}\n")
+    else:
+        # 测试所有节点
+        print_header("测试所有节点延迟")
+        print()
+
+        results = []
+        for i, proxy in enumerate(proxies, 1):
+            print(f"[{i}/{len(proxies)}] 测试 {proxy['name']}...", end=" ", flush=True)
+            delay = test_proxy_delay(proxy['name'])
+            results.append((i, proxy['name'], delay))
+            print(format_delay(delay))
+
+        # 按延迟排序
+        results.sort(key=lambda x: x[2] if x[2] > 0 else 999999)
+
+        print_header("测速结果（按延迟排序）")
+        print(f"\n{'排名':<6} {'序号':<6} {'节点名称':<25} {'延迟'}")
+        print("-" * 60)
+
+        for rank, (index, name, delay) in enumerate(results, 1):
+            if delay > 0:
+                print(f"{rank:<6} {index:<6} {name:<25} {format_delay(delay)}")
+
+        print()
+
+def cmd_best():
+    """自动切换到最快节点"""
+    print_header("自动选择最快节点")
+
+    proxies = get_proxies()
+    if not proxies:
+        print_error("未找到任何节点")
+        return
+
+    print_info("正在测试所有节点...")
+
+    best_node = None
+    best_delay = 999999
+
+    for proxy in proxies:
+        delay = test_proxy_delay(proxy['name'])
+        if 0 < delay < best_delay:
+            best_delay = delay
+            best_node = proxy['name']
+
+    if best_node:
+        print_success(f"最快节点: {best_node} ({best_delay}ms)")
+        print_info("正在切换...")
+        if switch_proxy(best_node):
+            print_success(f"已切换到最快节点: {best_node}")
+        else:
+            print_error("切换失败")
+    else:
+        print_error("所有节点均不可用")
+
+def cmd_add_vmess(vmess_url: str):
+    """添加 VMess 节点"""
+    print_header("添加 VMess 节点")
+
+    # 解析 vmess:// URL
+    import base64
+
+    try:
+        # 移除 vmess:// 前缀
+        if not vmess_url.startswith("vmess://"):
+            print_error("无效的 VMess URL（必须以 vmess:// 开头）")
+            return
+
+        encoded = vmess_url[8:]
+        decoded = base64.b64decode(encoded).decode('utf-8')
+        vmess_config = json.loads(decoded)
+
+        # 构建 Clash 节点配置
+        node_name = vmess_config.get("ps", f"Node-{int(time.time())}")
+
+        clash_node = {
+            "name": node_name,
+            "type": "vmess",
+            "server": vmess_config.get("add"),
+            "port": int(vmess_config.get("port", 443)),
+            "uuid": vmess_config.get("id"),
+            "alterId": int(vmess_config.get("aid", 0)),
+            "cipher": vmess_config.get("scy", "auto"),
+            "tls": vmess_config.get("tls") == "tls",
+            "skip-cert-verify": True,
+            "network": vmess_config.get("net", "tcp")
+        }
+
+        if vmess_config.get("sni"):
+            clash_node["servername"] = vmess_config.get("sni")
+
+        # 加载配置
+        config = load_config()
+
+        # 检查是否已存在
+        existing_names = [p["name"] for p in config.get("proxies", [])]
+        if node_name in existing_names:
+            print_warning(f"节点 '{node_name}' 已存在")
+            return
+
+        # 添加节点
+        config.setdefault("proxies", []).append(clash_node)
+
+        # 添加到 PROXY 组
+        for group in config.get("proxy-groups", []):
+            if group["name"] == "PROXY":
+                if node_name not in group["proxies"]:
+                    group["proxies"].insert(-1, node_name)  # 在 DIRECT 之前插入
+                break
+
+        # 保存配置
+        save_config(config)
+        print_success(f"已添加节点: {node_name}")
+
+    except Exception as e:
+        print_error(f"添加节点失败: {e}")
+
+def cmd_tune_daemon():
+    """自动调优守护进程"""
+    import os
+    import signal
+
+    # 配置参数
+    CHECK_INTERVAL = 300  # 5 分钟检查一次
+    DELAY_THRESHOLD = 300  # 延迟超过 300ms 触发切换
+
+    def log(message: str):
+        """写入日志"""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_msg = f"[{timestamp}] {message}\n"
+
+        # 写入日志文件
+        with open(TUNE_LOG_FILE, 'a', encoding='utf-8') as f:
+            f.write(log_msg)
+
+        # 同时输出到终端
+        print(log_msg.strip())
+
+    def find_best_node() -> Optional[tuple]:
+        """找到最快的节点，返回 (name, delay)"""
+        proxies = get_proxies()
+        if not proxies:
+            return None
+
+        best_node = None
+        best_delay = 999999
+
+        for proxy in proxies:
+            delay = test_proxy_delay(proxy['name'])
+            if 0 < delay < best_delay:
+                best_delay = delay
+                best_node = proxy['name']
+
+        return (best_node, best_delay) if best_node else None
+
+    def tune_loop():
+        """调优主循环"""
+        log("🚀 Clash 自动调优已启动")
+        log(f"⏱️  检查间隔: {CHECK_INTERVAL}秒 ({CHECK_INTERVAL//60}分钟)")
+        log(f"⚡ 延迟阈值: {DELAY_THRESHOLD}ms")
+        log(f"📝 日志文件: {TUNE_LOG_FILE}")
+
+        while True:
+            try:
+                # 获取当前节点
+                current = get_current_proxy()
+                if not current:
+                    log("⚠️  无法获取当前节点，跳过本次检查")
+                    time.sleep(CHECK_INTERVAL)
+                    continue
+
+                # 测试当前节点延迟
+                current_delay = test_proxy_delay(current)
+
+                if current_delay == 0:
+                    log(f"⚠️  当前节点 {current} 超时，正在寻找最快节点...")
+                    best = find_best_node()
+
+                    if best:
+                        best_node, best_delay = best
+                        if best_node != current:
+                            log(f"🔄 切换: {current} (超时) → {best_node} ({best_delay}ms)")
+                            switch_proxy(best_node)
+                        else:
+                            log(f"⚠️  所有节点均不可用")
+                    else:
+                        log(f"⚠️  未找到可用节点")
+
+                elif current_delay > DELAY_THRESHOLD:
+                    log(f"⚠️  当前节点 {current} 延迟过高: {current_delay}ms")
+                    log(f"🔍 正在寻找更快的节点...")
+
+                    best = find_best_node()
+                    if best:
+                        best_node, best_delay = best
+
+                        # 只有当最快节点比当前节点快至少 50ms 时才切换
+                        if best_node != current and best_delay < current_delay - 50:
+                            log(f"🔄 切换: {current} ({current_delay}ms) → {best_node} ({best_delay}ms)")
+                            switch_proxy(best_node)
+                        else:
+                            log(f"✓ 当前节点 {current} 已是最优选择")
+                    else:
+                        log(f"⚠️  未找到更快的节点")
+                else:
+                    log(f"✓ 当前节点 {current} 延迟正常: {current_delay}ms")
+
+                # 等待下次检查
+                time.sleep(CHECK_INTERVAL)
+
+            except KeyboardInterrupt:
+                log("⏹️  收到停止信号，正在退出...")
+                break
+            except Exception as e:
+                log(f"❌ 错误: {e}")
+                time.sleep(60)  # 出错后等待 1 分钟再重试
+
+    # 检查是否已在运行
+    if TUNE_PID_FILE.exists():
+        try:
+            with open(TUNE_PID_FILE, 'r') as f:
+                old_pid = int(f.read().strip())
+
+            # 检查进程是否存在
+            try:
+                os.kill(old_pid, 0)
+                print_error(f"自动调优已在运行 (PID: {old_pid})")
+                print_info("使用 'clash-node tune stop' 停止")
+                sys.exit(1)
+            except OSError:
+                # 进程不存在，删除旧的 PID 文件
+                TUNE_PID_FILE.unlink()
+        except Exception:
+            pass
+
+    # 写入 PID 文件
+    pid = os.getpid()
+    with open(TUNE_PID_FILE, 'w') as f:
+        f.write(str(pid))
+
+    print_success(f"自动调优已启动 (PID: {pid})")
+    print_info(f"日志文件: {TUNE_LOG_FILE}")
+    print_info("使用 'clash-node tune stop' 停止")
+    print_info("使用 'clash-node tune log' 查看日志")
+    print()
+
+    try:
+        tune_loop()
+    finally:
+        # 清理 PID 文件
+        if TUNE_PID_FILE.exists():
+            TUNE_PID_FILE.unlink()
+
+def cmd_tune_stop():
+    """停止自动调优"""
+    import os
+    import signal
+
+    if not TUNE_PID_FILE.exists():
+        print_warning("自动调优未运行")
+        return
+
+    try:
+        with open(TUNE_PID_FILE, 'r') as f:
+            pid = int(f.read().strip())
+
+        # 发送 SIGTERM 信号
+        os.kill(pid, signal.SIGTERM)
+        time.sleep(1)
+
+        # 检查是否已停止
+        try:
+            os.kill(pid, 0)
+            # 如果还在运行，强制杀死
+            os.kill(pid, signal.SIGKILL)
+            print_warning(f"强制停止进程 {pid}")
+        except OSError:
+            print_success(f"已停止自动调优 (PID: {pid})")
+
+        # 删除 PID 文件
+        TUNE_PID_FILE.unlink()
+
+    except Exception as e:
+        print_error(f"停止失败: {e}")
+        # 尝试删除 PID 文件
+        if TUNE_PID_FILE.exists():
+            TUNE_PID_FILE.unlink()
+
+def cmd_tune_status():
+    """查看自动调优状态"""
+    import os
+
+    if not TUNE_PID_FILE.exists():
+        print_info("自动调优: " + f"{Colors.RED}未运行{Colors.RESET}")
+        return
+
+    try:
+        with open(TUNE_PID_FILE, 'r') as f:
+            pid = int(f.read().strip())
+
+        # 检查进程是否存在
+        try:
+            os.kill(pid, 0)
+            print_info("自动调优: " + f"{Colors.GREEN}运行中{Colors.RESET} (PID: {pid})")
+
+            # 显示最近的日志
+            if TUNE_LOG_FILE.exists():
+                print_info(f"日志文件: {TUNE_LOG_FILE}")
+                print("\n最近 5 条日志:")
+                print("-" * 60)
+                with open(TUNE_LOG_FILE, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+                    for line in lines[-5:]:
+                        print(line.strip())
+        except OSError:
+            print_warning(f"进程 {pid} 不存在（可能已崩溃）")
+            TUNE_PID_FILE.unlink()
+    except Exception as e:
+        print_error(f"检查状态失败: {e}")
+
+def cmd_tune_log():
+    """查看自动调优日志"""
+    if not TUNE_LOG_FILE.exists():
+        print_warning("日志文件不存在")
+        return
+
+    print_header("自动调优日志")
+    print()
+
+    try:
+        with open(TUNE_LOG_FILE, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+
+            # 显示最后 50 行
+            for line in lines[-50:]:
+                print(line.strip())
+    except Exception as e:
+        print_error(f"读取日志失败: {e}")
+
+def cmd_tune(subcommand: Optional[str] = None):
+    """自动调优命令"""
+    if subcommand is None or subcommand == "start":
+        cmd_tune_daemon()
+    elif subcommand == "stop":
+        cmd_tune_stop()
+    elif subcommand == "status":
+        cmd_tune_status()
+    elif subcommand == "log":
+        cmd_tune_log()
+    else:
+        print_error(f"未知子命令: {subcommand}")
+        print_info("用法: clash-node tune [start|stop|status|log]")
+
+def cmd_help():
+    """显示帮助信息"""
+    help_text = f"""
+{Colors.BOLD}{Colors.CYAN}clash-node{Colors.RESET} - Clash 节点管理 CLI 工具
+
+{Colors.BOLD}用法:{Colors.RESET}
+  clash-node <命令> [参数]
+
+{Colors.BOLD}命令:{Colors.RESET}
+  {Colors.GREEN}list{Colors.RESET}              列出所有节点
+  {Colors.GREEN}<数字>{Colors.RESET}             切换到指定序号的节点（例如: clash-node 1）
+  {Colors.GREEN}status{Colors.RESET}            显示当前节点状态
+  {Colors.GREEN}test{Colors.RESET} [数字]       测试节点延迟（不指定数字则测试所有节点）
+  {Colors.GREEN}best{Colors.RESET}              自动切换到最快节点
+  {Colors.GREEN}tune{Colors.RESET} [start|stop|status|log]
+                      自动调优守护进程
+                        start  - 启动自动调优（默认）
+                        stop   - 停止自动调优
+                        status - 查看运行状态
+                        log    - 查看日志
+  {Colors.GREEN}add{Colors.RESET} <vmess://...> 添加 VMess 节点
+  {Colors.GREEN}help{Colors.RESET}              显示此帮助信息
+
+{Colors.BOLD}示例:{Colors.RESET}
+  clash-node list                    # 列出所有节点
+  clash-node 1                       # 切换到节点 1
+  clash-node test                    # 测试所有节点延迟
+  clash-node test 2                  # 测试节点 2 的延迟
+  clash-node best                    # 自动切换到最快节点
+  clash-node tune                    # 启动自动调优（后台监控）
+  clash-node tune stop               # 停止自动调优
+  clash-node tune status             # 查看调优状态
+  clash-node add vmess://...         # 添加新节点
+
+{Colors.BOLD}自动调优说明:{Colors.RESET}
+  - 每 5 分钟检查一次节点延迟
+  - 当前节点延迟 > 300ms 时自动切换到最快节点
+  - 后台运行，日志记录到 ~/.config/clash/tune.log
+
+{Colors.BOLD}项目地址:{Colors.RESET}
+  https://github.com/your-repo/clash-node
+
+{Colors.BOLD}许可证:{Colors.RESET}
+  MIT License
+"""
+    print(help_text)
+
+def main():
+    """主函数"""
+    if len(sys.argv) < 2:
+        cmd_list()
+        return
+
+    command = sys.argv[1]
+
+    # 数字命令（切换节点）
+    if command.isdigit():
+        cmd_switch(int(command))
+    elif command == "list" or command == "ls":
+        cmd_list()
+    elif command == "status" or command == "st":
+        cmd_status()
+    elif command == "test":
+        if len(sys.argv) > 2 and sys.argv[2].isdigit():
+            cmd_test(int(sys.argv[2]))
+        else:
+            cmd_test()
+    elif command == "best":
+        cmd_best()
+    elif command == "tune":
+        subcommand = sys.argv[2] if len(sys.argv) > 2 else None
+        cmd_tune(subcommand)
+    elif command == "add":
+        if len(sys.argv) < 3:
+            print_error("请提供 VMess URL")
+            print_info("用法: clash-node add vmess://...")
+        else:
+            cmd_add_vmess(sys.argv[2])
+    elif command == "help" or command == "-h" or command == "--help":
+        cmd_help()
+    else:
+        print_error(f"未知命令: {command}")
+        print_info("使用 'clash-node help' 查看帮助")
+        sys.exit(1)
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        print(f"\n{Colors.YELLOW}已取消{Colors.RESET}")
+        sys.exit(0)
+    except Exception as e:
+        print_error(f"发生错误: {e}")
+        sys.exit(1)

@@ -1,0 +1,79 @@
+# Clash Meta (mihomo) 配置示例
+# 复制此文件到 ~/.config/clash/config.yaml 并修改节点信息
+
+port: 7890
+socks-port: 10809
+# redir-port: 7892  # 禁用（需要 root 权限）
+mixed-port: 7893
+
+# REST API 管理接口
+external-controller: 127.0.0.1:9090
+external-ui: ui
+
+# 日志级别
+log-level: info
+
+# 允许 LAN 连接
+allow-lan: true
+bind-address: "*"
+
+# 代理节点列表（VMess 示例）
+proxies:
+  - name: "Node-1"
+    type: vmess
+    server: your-server-1.example.com
+    port: 443
+    uuid: your-uuid-here
+    alterId: 0
+    cipher: auto
+    tls: true
+    servername: your-sni.example.com
+    skip-cert-verify: true
+    network: tcp
+
+  - name: "Node-2"
+    type: vmess
+    server: your-server-2.example.com
+    port: 443
+    uuid: your-uuid-here
+    alterId: 0
+    cipher: auto
+    tls: true
+    servername: your-sni.example.com
+    skip-cert-verify: true
+    network: tcp
+
+  - name: "Node-3"
+    type: vmess
+    server: your-server-3.example.com
+    port: 443
+    uuid: your-uuid-here
+    alterId: 0
+    cipher: auto
+    tls: true
+    servername: your-sni.example.com
+    skip-cert-verify: true
+    network: tcp
+
+# 代理组
+proxy-groups:
+  - name: "PROXY"
+    type: select
+    proxies:
+      - Node-1
+      - Node-2
+      - Node-3
+      - DIRECT
+
+# 规则
+rules:
+  - MATCH,PROXY
+
+# DNS 配置
+dns:
+  enable: true
+  nameserver:
+    - 1.1.1.1  # Cloudflare DNS
+    - 8.8.8.8  # Google DNS
+  ipv6: false
+  enhanced-mode: fake-ip
