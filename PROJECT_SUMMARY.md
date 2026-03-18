@@ -138,7 +138,7 @@ clash-node tune stop
 
 ## 🤝 贡献者
 
-- **SLAM Research Team** - 初始开发
+- **charlii** - 初始开发
 
 ## 📄 许可证
 

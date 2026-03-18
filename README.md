@@ -206,7 +206,7 @@ chmod +x ~/bin/clash-node
 
 ## 📧 联系方式
 
-- 作者: SLAM Research Team
+- 作者: charlii
 - 项目地址: https://github.com/your-repo/clash-node
 - Issue: https://github.com/your-repo/clash-node/issues
 
